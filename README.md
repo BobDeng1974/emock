@@ -1,11 +1,11 @@
 [English README](./README_en.md)
 
-# EMOCK     [![license](https://img.shields.io/badge/license-Apache%202-brightgreen.svg?style=flat)](https://github.com/ez8-co/emock/blob/master/LICENSE)  [![Build Status](https://semaphoreci.com/api/v1/orca-zhang-91/emock/branches/master/shields_badge.svg)](https://semaphoreci.com/orca-zhang-91/emock)
+# EMOCK     [![license](https://img.shields.io/badge/license-Apache%202-brightgreen.svg?style=flat)](https://github.com/ez8-co/emock/blob/master/LICENSE)  [![Build Status](https://orca-zhang.semaphoreci.com/badges/emock/branches/master.svg?style=shields&key=e50d1d29-31e5-4977-950f-3eff3da05650)](https://orca-zhang.semaphoreci.com/projects/emock) [![Build status](https://ci.appveyor.com/api/projects/status/7a64ewar9yoifug5?svg=true)](https://ci.appveyor.com/project/orca-zhang/emock)
 
 - EMOCK是基于mockcpp核心改进的下一代C/C++跨平台mock库
   - **【使用简单】** 学习成本低，仅一个宏
   - **【没有依赖】** 除了STL和系统库函数
-  - **【跨平台】**   支持主流32/64位系统（\*nix、Windows）
+  - **【跨平台】**   支持主流32/64位系统（\*nix、Windows、MacOS）
   - **【完全支持】** 支持mock所有类型的函数
   - **【非侵入设计】** 不需要调整任何待测代码
 
@@ -33,7 +33,7 @@
 <table style="text-align: center">
    <tr>
       <td></td>
-      <td colspan="2">平台</td>
+      <td colspan="3">平台</td>
       <td colspan="3">成员函数</td>
       <td colspan="3">普通函数</td>
       <td>杂项</td>
@@ -41,7 +41,8 @@
    <tr>
       <td>库</td>
       <td>Linux</td>
-      <td>Windows</td>
+      <td>Win</td>
+      <td>Mac</td>
       <td>虚函数</td>
       <td>普通</td>
       <td>静态</td>
@@ -61,11 +62,13 @@
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
+      <td>:white_check_mark:</td>
    </tr>
    <tr>
       <td><a href="https://github.com/cpputest/cpputest">CppUMock</a></td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
+      <td>:x:</td>
       <td>:white_check_mark:</td>
       <td>:x:</td>
       <td>:white_check_mark:</td>
@@ -78,6 +81,7 @@
       <td><a href="https://github.com/sinojelly/mockcpp">mockcpp</a></td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
+      <td>:x:</td>
       <td>:white_check_mark:</td>
       <td>:x:</td>
       <td>:white_check_mark:</td>
@@ -90,6 +94,7 @@
       <td><a href="https://github.com/google/googletest/tree/master/googlemock">googlemock</a></td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
+      <td>:x:</td>
       <td>:white_check_mark:</td>
       <td>:x:</td>
       <td>:x:</td>
@@ -102,6 +107,7 @@
       <td><a href="https://github.com/tpounds/mockitopp">mockitopp</a></td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
+      <td>:x:</td>
       <td>:white_check_mark:</td>
       <td>:x:</td>
       <td>:x:</td>
@@ -114,6 +120,7 @@
       <td><a href="https://github.com/hjagodzinski/C-Mock">C-Mock</a></td>
       <td>:white_check_mark:</td>
       <td>:x:</td>
+      <td>:x:</td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
@@ -125,6 +132,7 @@
    <tr>
       <td><a href="https://github.com/gzc9047/CppFreeMock">CppFreeMock</a></td>
       <td>:white_check_mark:</td>
+      <td>:x:</td>
       <td>:x:</td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
@@ -171,7 +179,7 @@
    </tr>
 </table>
 
-- EMOCK理论上也支持UNIX, Android, MacOS和iOS等\*nix系统，但可能需要少量改动
+- EMOCK理论上也支持UNIX, Android和iOS等\*nix系统，但可能需要少量改动
 
 ## 快速概览
 
@@ -261,9 +269,27 @@
           .expects(never()); // 不会被调用
   ```
 
+## 实验功能（根据函数签名式mock）
+
+   ```cpp
+      EMOCK("foo::bar")
+          .stubs()
+          .will(returnValue(1));
+   ```
+
+   - 设计参考 [MSDN - SymEnumSymbols](https://docs.microsoft.com/zh-cn/windows/win32/api/dbghelp/nf-dbghelp-symenumsymbols?redirectedfrom=MSDN)
+
+   - 使用规范：`[[__cdecl|__stdcall|__thiscall]#]|[!] [{<return_type>}] [<namespace>::] [<class>::] <function> [(<argument_list>)] [@<library>]`
+
+   - 支持通配符，`*` 代表任意数量个字符，`?` 代表单个字符
+   
+   - `@` 后面为库名，`#` 前为调用约定，其中用`!`是`__stdcall#`的缩写， `{int}`代表返回值类型为`int`
+
+   - 例如：`!{int}*::foo::bar(double)@x??`代表返回值为`int`类型，调用约定为`__stdcall`的方法`foo::bar`，命名空间任意匹配，库名`x??`代表`x`开头，且为三个字符
+
 ## 使用手册
 
-- [访问wiki学习如何使用EMOCK](https://github.com/ez8-co/emock/wiki)
+- [访问wiki学习如何使用EMOCK（建设中，可以参考网上mockcpp的教程）](https://github.com/ez8-co/emock/wiki)
 
 ## 衷心感谢
 

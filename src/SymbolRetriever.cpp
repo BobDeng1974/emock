@@ -15,24 +15,45 @@
 #include <emock/TypeString.h>
 #include <emock/ReportFailure.h>
 
-#ifdef _MSC_VER
+#if (_MSC_VER) ||  (__MINGW32__)
 
-	#include <windows.h>
-	#include <dbghelp.h>
+	#include <Windows.h>
+	#include <DbgHelp.h>
     #include <vector>
-	#pragma comment(lib, "Dbghelp.lib")
+
+    #pragma message("111111") 
+
+    #ifdef _MSC_VER
+	    #pragma comment(lib, "Dbghelp.lib")
+    #endif
+
+    #ifdef _WIN64 // [
+        typedef unsigned __int64  uintptr_t;
+    #else // _WIN64 ][
+        typedef _W64 unsigned int uintptr_t;
+    #endif // _WIN64 ]
 
 #else
 
 	#include <sys/mman.h>
 	#include <sys/stat.h>
 	#include <fcntl.h>
-	#include <link.h>
 	#include <string.h>
 	#include <unistd.h>
 	#include <cassert>
 	#include <stdio.h>
-    #include <linux/limits.h>
+    #if __APPLE__
+        #include <mach-o/dyld.h>
+        #include <mach-o/dyld_images.h>
+        #include <mach-o/fat.h>
+        #include <mach-o/nlist.h>
+        #include <dlfcn.h>
+        #include <ar.h>
+        #include <limits.h>
+    #else
+	    #include <link.h>
+        #include <linux/limits.h>
+    #endif
 
 #endif
 
@@ -78,7 +99,7 @@ EMOCK_NS_START
             return stringify.substr(start, stringify.find_last_not_of(')') - start + 1);
         }
 
-#ifdef _MSC_VER
+#if (_MSC_VER) ||  (__MINGW32__)
         static std::string extractMethodSignatureName(const char* pmf_info, std::string& symbolName, const std::string& stringify) {
 #else
         static std::string extractMethodSignatureName(const char* pmf_info, const std::string& stringify) {
@@ -91,7 +112,7 @@ EMOCK_NS_START
                     std::string ret(from, pmf_info - from - 1);
                     ret += extractMethodName(stringify);
                     // extract symbol name
-#ifdef _MSC_VER
+#if (_MSC_VER) ||  (__MINGW32__)
                     symbolName = strchr(ret.c_str(), ' ') + 1;
 #endif
                     // extract arg list
@@ -103,6 +124,9 @@ EMOCK_NS_START
                         else if(*pmf_info == ')')
                             if(!--depth) {
                                 ret.append(from, pmf_info - from + 1);
+                                if(std::string(pmf_info + 1) == " const") {
+                                    ret += " const";
+                                }
                                 break;
                             }
                         ++pmf_info;
@@ -115,7 +139,7 @@ EMOCK_NS_START
         }
     }
 
-#ifdef _MSC_VER
+#if (_MSC_VER) ||  (__MINGW32__)
 
     std::map<std::pair<ULONG64, std::string>, std::map<int, std::string> > g_symbolCache;
     void SymbolRetriever::reset() {
@@ -169,7 +193,16 @@ EMOCK_NS_START
                 }
                 else {
                     char filePath[MAX_PATH] = {0};
-                    if(SymGetSymbolFile(GetCurrentProcess(), NULL, moduleInfo.ImageName, sfPdb, filePath, MAX_PATH, filePath, MAX_PATH))
+                    /*
+                    typedef enum {
+                        sfImage = 0,
+                        sfDbg,
+                        sfPdb,
+                        sfMpd,
+                        sfMax
+                    } IMAGEHLP_SF_TYPE;
+                    */
+                    if(SymGetSymbolFile(GetCurrentProcess(), NULL, moduleInfo.ImageName, 2/*sfDbg*/, filePath, MAX_PATH, filePath, MAX_PATH))
                         return filePath;
                 }
             }
@@ -412,38 +445,31 @@ EMOCK_NS_START
             std::map<unsigned long long, std::string>& _symMap;
         };
 
+    #if !__APPLE__
         template<typename Elf_Ehdr, typename Elf_Shdr, typename Elf_Sym>
         bool _findAddr(const char* base, ISymbolCheckor* checkor)
         {
             const Elf_Ehdr* elf_header = (const Elf_Ehdr*)base;
             const Elf_Shdr* elf_section = (const Elf_Shdr*)(base + elf_header->e_shoff);
-            const char* shstrTab = base + elf_section[elf_header->e_shstrndx].sh_offset;
-            const char* strTab = NULL;
-            for(int i = 1; i < elf_header->e_shnum; ++i) {
-                if(!strcmp(shstrTab + elf_section[i].sh_name, ".strtab")) {
-                    strTab = base + elf_section[i].sh_offset;
-                    break;
+            for(int i = 0; i < elf_header->e_shnum; ++i) {
+                if(elf_section[i].sh_type != SHT_SYMTAB) {
+                    continue;
                 }
-            }
-            if(!strTab)
-                return false;
-            for(int i = 1; i < elf_header->e_shnum; ++i) {
-                if(strstr(shstrTab + elf_section[i].sh_name, "sym")) {
-                    int symEntries = elf_section[i].sh_size / sizeof(Elf_Sym);
-                    const Elf_Sym* symTable = (const Elf_Sym*)(base + elf_section[i].sh_offset);
-                    for(int j = 0; j < symEntries; ++j) {
-                        if(ELF32_ST_TYPE(symTable[j].st_info) != 2 || !symTable[j].st_value)
-                            continue;
-                        const char* symClsName = strTab + symTable[j].st_name;
-                        const char* outterLib = strchr(symClsName, '@');
-                        if(!checkor->symContinue(getDemangledName(outterLib ? std::string(symClsName, outterLib - symClsName).c_str() : symClsName).c_str(),
-                                                 symTable[j].st_value))
-                            return true;
-                    }
+                const char* strTab = (const char*)(base + elf_section[elf_section[i].sh_link].sh_offset);
+                const Elf_Sym* symTable = (const Elf_Sym*)(base + elf_section[i].sh_offset);
+                for(unsigned int j = 0; j < elf_section[i].sh_size / elf_section[i].sh_entsize; ++j) {
+                    if(ELF32_ST_TYPE(symTable[j].st_info) != STT_FUNC || !symTable[j].st_value || symTable[j].st_shndx == SHN_UNDEF)
+                        continue;
+                    const char* symClsName = strTab + symTable[j].st_name;
+                    const char* outterLib = strchr(symClsName, '@');
+                    if(!checkor->symContinue(getDemangledName(outterLib ? std::string(symClsName, outterLib - symClsName).c_str() : symClsName).c_str(),
+                                                symTable[j].st_value))
+                        return true;
                 }
             }
             return false;
         }
+    #endif
 
         bool findAddrInElf(const char* file_name, ISymbolCheckor* checkor) {
             bool ret = false;
@@ -453,6 +479,68 @@ EMOCK_NS_START
                 if(!fstat(fd, &sb)) {
                     char* base = (char*)mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
                     if(base != MAP_FAILED) {
+    #if __APPLE__
+                        switch (*(uint32_t*)base) {
+                        case FAT_MAGIC:
+                        case FAT_CIGAM:
+                        case FAT_MAGIC_64:
+                        case FAT_CIGAM_64:
+                            break;
+
+                        case MH_MAGIC:
+                        case MH_CIGAM:
+                            {
+                                mach_header *header = (mach_header *)base;
+                                load_command * lc = (load_command *)(base + sizeof(*header));
+                                for (int i=0; i<header->ncmds; ++i) {
+                                    if (lc->cmd == LC_SYMTAB) {
+                                        symtab_command * symc = (struct symtab_command *)lc;
+                                        char * strtab = (char *)base + symc->stroff;
+                                        struct nlist * symtab = (struct nlist *)((char*)base + symc->symoff);
+                                        for (int j=0; j < symc->nsyms; ++j) {
+                                            const char* symClsName = strtab + ((struct nlist*)&symtab[j])->n_un.n_strx;
+                                            const char* outterLib = strchr(symClsName, '@');
+                                            if(!checkor->symContinue(getDemangledName(outterLib ? std::string(symClsName, outterLib - symClsName).c_str() : symClsName).c_str(),
+                                                                    (uintptr_t)((struct nlist*)&symtab[j])->n_value))
+                                                return true;
+                                        }
+                                    }
+                                    lc = (struct load_command *)((uint8_t *)lc + lc->cmdsize);
+                                }
+                            }
+                            break;
+
+                        case MH_MAGIC_64:
+                        case MH_CIGAM_64:
+                            {
+                                mach_header_64 *header = (mach_header_64 *)base;
+                                load_command * lc = (load_command *)(base + sizeof(*header));
+                                for (int i=0; i<header->ncmds; ++i) {
+                                    if (lc->cmd == LC_SYMTAB) {
+                                        symtab_command * symc = (struct symtab_command *)lc;
+                                        char * strtab = (char *)base + symc->stroff;
+                                        struct nlist_64 * symtab = (struct nlist_64 *)((char*)base + symc->symoff);
+                                        for (int j=0; j < symc->nsyms; ++j) {
+                                            const char* symClsName = strtab + ((struct nlist_64*)&symtab[j])->n_un.n_strx;
+                                            const char* outterLib = strchr(symClsName, '@');
+                                            if(!checkor->symContinue(getDemangledName(outterLib ? std::string(symClsName, outterLib - symClsName).c_str() : symClsName).c_str(),
+                                                                    (uintptr_t)((struct nlist_64*)&symtab[j])->n_value))
+                                                return true;
+                                        }
+                                    }
+                                    lc = (struct load_command *)((uint8_t *)lc + lc->cmdsize);
+                                }
+                            }
+                            break;
+
+                        //case FT_ARMAG:
+                        //    break;
+
+                        default:
+                            break;
+                        }
+
+    #else
                         switch(base[EI_CLASS]) {
                             case 1:
                               ret = _findAddr<Elf32_Ehdr, Elf32_Shdr, Elf32_Sym>(base, checkor);
@@ -461,6 +549,7 @@ EMOCK_NS_START
                               ret = _findAddr<Elf64_Ehdr, Elf64_Shdr, Elf64_Sym>(base, checkor);
                               break;
                         }
+    #endif
                         munmap(base, sb.st_size);
                     }
                 }
@@ -471,24 +560,49 @@ EMOCK_NS_START
     }
 
     void symbolRetrieve(ISymbolCheckor* checkor) {
-        std::set<std::string> aux_set;
         char file_name[PATH_MAX] = {0};
+    #if __APPLE__
+        uint32_t size = PATH_MAX;
+        if(_NSGetExecutablePath(&file_name[0], &size) != -1) {
+    #else
         if(readlink("/proc/self/exe", file_name, PATH_MAX) > 0) {
+    #endif
             if(findAddrInElf(file_name, checkor)) {
                 if(checkor->libContinue() == false)
                     return;
             }
         }
 
-        aux_set.insert(file_name);
+    #if __APPLE__
+        task_dyld_info dyld_info;
+        mach_msg_type_number_t count = TASK_DYLD_INFO_COUNT;
+        if (task_info(mach_task_self(), TASK_DYLD_INFO, (task_info_t)&dyld_info, &count)) {
+            return;
+        }
+
+        // Get image array's size and address
+        dyld_all_image_infos *infos = (dyld_all_image_infos *)dyld_info.all_image_info_addr;
+        for (int i = 0; i < infos->infoArrayCount; ++i) {
+            const dyld_image_info *image = infos->infoArray + i;
+            if(checkor->libCheck(image->imageFilePath)) {
+                if(findAddrInElf(image->imageFilePath, checkor)) {
+                    if(checkor->libContinue() == false) {
+                        checkor->setDlBase((unsigned long long)image->imageLoadAddress);
+                        break;
+                    }
+                }
+            }
+        }
+    #else
         FILE* fp = fopen("/proc/self/maps", "r");
         if(!fp) {
             EMOCK_REPORT_FAILURE(std::string("Failed to fetch current proc maps of [").append(file_name).append("]").c_str());
             return;
         }
-
-        char buf[PATH_MAX + 100] = {0};
+        std::set<std::string> aux_set;
+        aux_set.insert(file_name);
         while(!feof(fp)) {
+            char buf[PATH_MAX + 100] = {0};
             if(fgets(buf, sizeof(buf), fp) == 0)
                 break;
 
@@ -497,8 +611,8 @@ EMOCK_NS_START
             if(aux_set.count(file_name) == 0) {
                 Dl_info dlinfo;
                 if(dladdr((void*)begin, &dlinfo)) {
-                    checkor->setDlBase((unsigned long long)dlinfo.dli_fbase);
                     if(checkor->libCheck(dlinfo.dli_fname)) {
+                        checkor->setDlBase((unsigned long long)dlinfo.dli_fbase);
                         if(findAddrInElf(dlinfo.dli_fname, checkor)) {
                             if(checkor->libContinue() == false)
                                 break;
@@ -509,6 +623,7 @@ EMOCK_NS_START
             }
         }
         fclose(fp);
+    #endif
     }
 
     void* SymbolRetriever::getMethodAddress(void*, const std::type_info& info, const std::string& stringify) {

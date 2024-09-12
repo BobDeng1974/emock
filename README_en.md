@@ -1,11 +1,11 @@
 [简体中文](./README.md)
 
-# What is EMOCK?      [![license](https://img.shields.io/badge/license-Apache%202-brightgreen.svg?style=flat)](https://github.com/ez8-co/emock/blob/master/LICENSE)  [![Build Status](https://semaphoreci.com/api/v1/orca-zhang-91/emock/branches/master/shields_badge.svg)](https://semaphoreci.com/orca-zhang-91/emock)
+# What is EMOCK?      [![license](https://img.shields.io/badge/license-Apache%202-brightgreen.svg?style=flat)](https://github.com/ez8-co/emock/blob/master/LICENSE)  [![Build Status](https://orca-zhang.semaphoreci.com/badges/emock/branches/master.svg?style=shields&key=e50d1d29-31e5-4977-950f-3eff3da05650)](https://orca-zhang.semaphoreci.com/projects/emock) [![Build status](https://ci.appveyor.com/api/projects/status/7a64ewar9yoifug5?svg=true)](https://ci.appveyor.com/project/orca-zhang/emock)
 
 - EMOCK is next generation easy-to-use C++ Mock Library based on mockcpp.
   - **[Easy to Use]** only one MACRO, without extra studies.
   - **[No Dependencies]** unless STL and std C libraries.
-  - **[Cross Platform]** support popular OS (both x86 & x64).
+  - **[Cross Platform]** support popular OS (both x86 & x64, *nix/windows/macOS).
   - **[Fully Support]** support all kinds of functions.
   - **[No Intrusions]** no need to modify any source code.
 
@@ -36,7 +36,7 @@
 <table style="text-align: center">
    <tr>
       <td></td>
-      <td colspan="2">Platform</td>
+      <td colspan="3">Platform</td>
       <td colspan="3">Member function</td>
       <td colspan="3">General function</td>
       <td>Misc</td>
@@ -45,6 +45,7 @@
       <td>Library</td>
       <td>Linux</td>
       <td>Windows</td>
+      <td>MacOS</td>
       <td>Virtual</td>
       <td>Normal</td>
       <td>Static</td>
@@ -64,11 +65,13 @@
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
+      <td>:white_check_mark:</td>
    </tr>
    <tr>
       <td><a href="https://github.com/cpputest/cpputest">CppUMock</a></td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
+      <td>:x:</td>
       <td>:white_check_mark:</td>
       <td>:x:</td>
       <td>:white_check_mark:</td>
@@ -81,6 +84,7 @@
       <td><a href="https://github.com/sinojelly/mockcpp">mockcpp</a></td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
+      <td>:x:</td>
       <td>:white_check_mark:</td>
       <td>:x:</td>
       <td>:white_check_mark:</td>
@@ -93,6 +97,7 @@
       <td><a href="https://github.com/google/googletest/tree/master/googlemock">googlemock</a></td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
+      <td>:x:</td>
       <td>:white_check_mark:</td>
       <td>:x:</td>
       <td>:x:</td>
@@ -105,6 +110,7 @@
       <td><a href="https://github.com/tpounds/mockitopp">mockitopp</a></td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
+      <td>:x:</td>
       <td>:white_check_mark:</td>
       <td>:x:</td>
       <td>:x:</td>
@@ -117,6 +123,7 @@
       <td><a href="https://github.com/hjagodzinski/C-Mock">C-Mock</a></td>
       <td>:white_check_mark:</td>
       <td>:x:</td>
+      <td>:x:</td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>
@@ -128,6 +135,7 @@
    <tr>
       <td><a href="https://github.com/gzc9047/CppFreeMock">CppFreeMock</a></td>
       <td>:white_check_mark:</td>
+      <td>:x:</td>
       <td>:x:</td>
       <td>:white_check_mark:</td>
       <td>:white_check_mark:</td>

@@ -14,17 +14,31 @@
 #include <emock/ReportFailure.h>
 #include <emock/ArgumentsMacroHelpers.h>
 
-#ifdef _MSC_VER
+#if (_MSC_VER) ||  (__MINGW32__)
 
-    #include <windows.h>
+    #include <Windows.h>
 	#include <cassert>
+    #ifdef _WIN64 // [
+        typedef unsigned __int64  uintptr_t;
+    #else // _WIN64 ][
+        typedef _W64 unsigned int uintptr_t;
+    #endif // _WIN64 ]
+    typedef signed __int64     int64_t;
 
 #else
 
     #include <sys/mman.h>
     #include <inttypes.h>
     #include <stdio.h>
-    #include <linux/limits.h>
+
+    #if __APPLE__
+        #include <limits.h>
+        #include <mach/mach_vm.h>
+        #include <mach/mach_init.h>
+    #else
+        #include <linux/limits.h>
+
+    #endif
 
 #endif
 
@@ -41,13 +55,14 @@ namespace {
 
     static std::list<TrampolineInfo> g_trampolines;
 
-#define PAGE_ALIGN_BITS  12
-#define PAGE_SIZE        (1 << PAGE_ALIGN_BITS)
+#define EMOCK_PAGE_ALIGN_BITS  12
+#define EMOCK_PAGE_SIZE        (1 << EMOCK_PAGE_ALIGN_BITS)
 
 static const size_t kMaxAllocationDelta = 0x80000000; // 2GB
-static const size_t kAllocationSize     = PAGE_SIZE;  // 4KB
+static const size_t kAllocationSize     = EMOCK_PAGE_SIZE;  // 4KB
+static const size_t kAlignmentSize      = 64;         // 64
 
-#ifdef _MSC_VER
+#if (_MSC_VER) ||  (__MINGW32__)
 
     #if BUILD_FOR_X64
         #define _ADDRESS_MAX_VALUE 0x80000000000
@@ -73,7 +88,7 @@ static const size_t kAllocationSize     = PAGE_SIZE;  // 4KB
             if (mbi.State != MEM_FREE)
                 continue;
 
-            if ((unsigned long long)mbi.AllocationBase + mbi.RegionSize > _ADDRESS_MAX_VALUE)
+            if ((uintptr_t)mbi.AllocationBase + mbi.RegionSize > _ADDRESS_MAX_VALUE)
                 break;
 
             if (void* allocated = VirtualAlloc(mbi.AllocationBase, alloc_size, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE))
@@ -90,7 +105,7 @@ static const size_t kAllocationSize     = PAGE_SIZE;  // 4KB
 
         if (allocated)
         {
-            if (std::abs((long)dst - (long)allocated) > kMaxAllocationDelta)
+            if (std::abs((int64_t)dst - (int64_t)allocated) > kMaxAllocationDelta)
             {
                 VirtualFree(allocated, 0, MEM_RELEASE);
                 return NULL;
@@ -106,7 +121,7 @@ static const size_t kAllocationSize     = PAGE_SIZE;  // 4KB
 
 #else
 
-    #define ALIGN_TO_PAGE_BOUNDARY(addr) (void*) (((uintptr_t)addr) >> PAGE_ALIGN_BITS << PAGE_ALIGN_BITS)
+    #define ALIGN_TO_PAGE_BOUNDARY(addr) (void*) (((uintptr_t)addr) >> EMOCK_PAGE_ALIGN_BITS << EMOCK_PAGE_ALIGN_BITS)
 
     void* TrampolineAllocateImpl(const unsigned char* dst, size_t alloc_size)
     {
@@ -121,31 +136,86 @@ static const size_t kAllocationSize     = PAGE_SIZE;  // 4KB
 
     void* TrampolineAllocate(const unsigned char* dst, size_t alloc_size)
     {
+    #if __APPLE__
+        uintptr_t last_end = 0;
+        while(true) {
+            mach_vm_address_t address = last_end;
+            mach_vm_size_t size = 0;
+            uint32_t depth = 2048;
+            vm_region_submap_info_data_64_t info;
+            mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+            kern_return_t kr = mach_vm_region_recurse(mach_task_self(), &address, &size,
+                                                    &depth, (vm_region_recurse_info_t)&info, &count);
+            if (kr != KERN_SUCCESS) {
+                break;
+            }
+
+            // first block is too far
+            if(std::abs((int64_t)address - (int64_t)dst) > kMaxAllocationDelta) {
+                for (size_t i = 0; i < 10000; i++) {
+                    uintptr_t begin = floor((double)(kMaxAllocationDelta - alloc_size) / kAllocationSize - i) * kAllocationSize;
+                    if(void* allocated = TrampolineAllocateImpl((unsigned char*)begin, alloc_size)) {
+                        return allocated;
+                    }
+                }
+                break;
+            }
+
+            uintptr_t begin = address;
+            uintptr_t end = address + size;
+            if(last_end && begin != last_end && begin - last_end > alloc_size) {
+                // alloc at end of last
+                if(std::abs((int64_t)dst - (int64_t)last_end) < kMaxAllocationDelta) {
+                    // last_end align forward
+                    last_end = ceil((double)last_end / kAllocationSize) * kAllocationSize;
+                    if(void* allocated = TrampolineAllocateImpl((unsigned char*)last_end, alloc_size)) {
+                        return allocated;
+                    }
+                }
+                // alloc at begin of current
+                if(std::abs((int64_t)begin - (int64_t)dst) < kMaxAllocationDelta) {
+                    // begin align backward
+                    begin = floor((double)(begin - alloc_size) / kAllocationSize) * kAllocationSize;
+                    if(void* allocated = TrampolineAllocateImpl((unsigned char*)begin - alloc_size, alloc_size)) {
+                        return allocated;
+                    }
+                }
+            }
+            last_end = end;
+        }
+        if(void* allocated = TrampolineAllocateImpl(dst - alloc_size, alloc_size)) {
+            return allocated;
+        }
+    #else
         FILE* fp = fopen("/proc/self/maps", "r");
         if(!fp) {
             EMOCK_REPORT_FAILURE("Failed to fetch current proc maps");
             return NULL;
         }
 
-        unsigned long last_end = 0;
+        uintptr_t last_end = 0;
         while(!feof(fp)) {
             char buf[PATH_MAX + 100] = {0};
             if(fgets(buf, sizeof(buf), fp) == 0)
                 break;
 
-            unsigned long begin, end = 0;
+            uintptr_t begin, end = 0;
             sscanf(buf, "%lx-%lx %*[^\n]", &begin, &end);
             if(last_end && begin != last_end && begin - last_end > alloc_size) {
                 // alloc at end of last
-                if((size_t)(dst - (unsigned char*)last_end) < kMaxAllocationDelta) {
-                    if(void* allocated = TrampolineAllocateImpl(dst, alloc_size)) {
+                if(std::abs((int64_t)dst - (int64_t)last_end) < kMaxAllocationDelta) {
+                    // last_end align forward
+                    last_end = ceil((double)last_end / kAllocationSize) * kAllocationSize;
+                    if(void* allocated = TrampolineAllocateImpl((unsigned char*)last_end, alloc_size)) {
                         fclose(fp);
                         return allocated;
                     }
                 }
                 // alloc at begin of current
-                if((size_t)((unsigned char*)begin - dst) < kMaxAllocationDelta) {
-                    if(void* allocated = TrampolineAllocateImpl(dst - alloc_size, alloc_size)) {
+                if(std::abs((int64_t)begin - (int64_t)dst) < kMaxAllocationDelta) {
+                    // begin align backward
+                    begin = floor((double)(begin - alloc_size) / kAllocationSize) * kAllocationSize;
+                    if(void* allocated = TrampolineAllocateImpl((unsigned char*)begin - alloc_size, alloc_size)) {
                         fclose(fp);
                         return allocated;
                     }
@@ -155,6 +225,7 @@ static const size_t kAllocationSize     = PAGE_SIZE;  // 4KB
         }
 
         fclose(fp);
+    #endif
         return NULL;
     }
 
@@ -171,20 +242,19 @@ static const size_t kAllocationSize     = PAGE_SIZE;  // 4KB
         for(std::list<TrampolineInfo>::iterator it = g_trampolines.begin();
             it != g_trampolines.end();
             ++it) {
-            if(it->size - it->used > alloc_size) {
+            if(it->size - it->used > ceil((double)alloc_size / kAlignmentSize) * kAlignmentSize) {
                 trampoline = it->base + it->used;
-                it->used += alloc_size;
+                it->used += size_t(ceil((double)alloc_size / kAlignmentSize) * kAlignmentSize);
                 break;
             }
         }
         if(!trampoline) {
-            TrampolineInfo info = {NULL, kAllocationSize, alloc_size};
+            TrampolineInfo info = {NULL, kAllocationSize, (size_t)ceil((double)alloc_size / kAlignmentSize) * kAlignmentSize};
             trampoline = info.base = (unsigned char*)TrampolineAllocate((const unsigned char*)src, info.size);
             g_trampolines.push_back(info);
         }
         return trampoline;
     }
-
 }
 
 #if BUILD_FOR_X64
@@ -197,8 +267,11 @@ static const size_t kAllocationSize     = PAGE_SIZE;  // 4KB
 
     void* Trampoline::get(const void* src, void* dst) {
 #if BUILD_FOR_X64
-        if(std::abs((long)src - (long)dst) > kMaxAllocationDelta) {
+        if(std::abs((int64_t)src - (int64_t)dst) > kMaxAllocationDelta) {
             unsigned char* trampoline = getTrampoline(src, sizeof(longJmpCodeTemplate));
+            if(!trampoline) {
+                return NULL;
+            }
             ::memcpy(trampoline, longJmpCodeTemplate, sizeof(longJmpCodeTemplate));
             *(uintptr_t *)&trampoline[6] = (uintptr_t)dst;
             return trampoline;
@@ -211,17 +284,23 @@ static const size_t kAllocationSize     = PAGE_SIZE;  // 4KB
     }
 
     void* Trampoline::get4MemFunc(const void* src, void* dst) {
-#ifdef _MSC_VER
+#if (_MSC_VER) ||  (__MINGW32__)
         static const unsigned char ecxToArgList[] = { 0x58, 0x51, 0x50 };
         // apply trampoline and push ecx
     #if BUILD_FOR_X64
         unsigned char* trampoline = getTrampoline(src, sizeof(ecxToArgList) + sizeof(longJmpCodeTemplate));
+        if(!trampoline) {
+            return NULL;
+        }
         ::memcpy(trampoline, ecxToArgList, sizeof(ecxToArgList));
         ::memcpy(trampoline + sizeof(ecxToArgList), longJmpCodeTemplate, sizeof(longJmpCodeTemplate));
         *(uintptr_t *)&trampoline[sizeof(ecxToArgList) + 6] = (uintptr_t)dst;
     #elif BUILD_FOR_X86
         static const unsigned char x86JmpCodeTemplate[] = { 0xE9, 0x00, 0x00, 0x00, 0x00 };
         unsigned char* trampoline = getTrampoline(src, sizeof(ecxToArgList) + sizeof(x86JmpCodeTemplate));
+        if(!trampoline) {
+            return NULL;
+        }
         ::memcpy(trampoline, ecxToArgList, sizeof(ecxToArgList));
         ::memcpy(trampoline + sizeof(ecxToArgList), x86JmpCodeTemplate, sizeof(x86JmpCodeTemplate));
         *(unsigned int*)&trampoline[sizeof(ecxToArgList) + 1] = (unsigned int)((unsigned long)dst - (unsigned long)trampoline - sizeof(x86JmpCodeTemplate) - sizeof(ecxToArgList));
